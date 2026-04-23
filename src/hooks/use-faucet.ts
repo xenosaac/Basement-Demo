@@ -7,10 +7,9 @@ import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import type { InputEntryFunctionData } from "@aptos-labs/ts-sdk";
 import {
   aptos,
-  adminAddress,
   buildClaimFaucetTxn,
 } from "@/lib/aptos";
-import { portfolioAddressQueryKey } from "./use-portfolio-query";
+import { portfolioOnChainQueryKey } from "./use-portfolio-onchain";
 import { FAUCET_AMOUNT } from "@/lib/constants";
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -51,10 +50,21 @@ export function useFaucet() {
         },
       });
 
-      // Attach the faucet-admin public address so the wallet knows whose
-      // signature it is delegating fee payment to.
+      // Fetch the canonical fee-payer address from the server — it's derived
+      // from the server-held faucet admin private key, so this can't drift
+      // from the signer even if env vars rotate independently.
+      const feePayerRes = await fetch("/api/faucet/sponsor", { cache: "no-store" });
+      const feePayerData = (await feePayerRes.json().catch(() => ({}))) as {
+        feePayerAddress?: string;
+        error?: string;
+      };
+      if (!feePayerRes.ok || !feePayerData.feePayerAddress) {
+        throw new Error(
+          feePayerData.error ?? `faucet/sponsor GET returned ${feePayerRes.status}`,
+        );
+      }
       const { AccountAddress } = await import("@aptos-labs/ts-sdk");
-      rawTxn.feePayerAddress = AccountAddress.fromString(adminAddress());
+      rawTxn.feePayerAddress = AccountAddress.fromString(feePayerData.feePayerAddress);
 
       const senderAuth = await signTransaction({
         transactionOrPayload: rawTxn,
@@ -84,7 +94,7 @@ export function useFaucet() {
     },
     onSuccess: ({ claimed }) => {
       setMessage(`+${claimed} VirtualUSD`);
-      queryClient.invalidateQueries({ queryKey: portfolioAddressQueryKey(address) });
+      queryClient.invalidateQueries({ queryKey: portfolioOnChainQueryKey(address) });
       queryClient.invalidateQueries({ queryKey: ["auth-session"] });
       setTimeout(() => setMessage(""), 3000);
     },
